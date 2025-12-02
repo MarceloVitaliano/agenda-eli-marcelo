@@ -36,6 +36,31 @@ body {
 }
 
 /* ================================
+   SELECTOR DEL DUEÑO DEL DISPOSITIVO
+================================ */
+.device-config {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.device-config label {
+  color: #cbd5e1;
+}
+
+.device-config select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+}
+
+/* ================================
    BOTONES
 ================================ */
 .btn-primary {
@@ -224,4 +249,3 @@ body {
     padding: 12px;
   }
 }
-
