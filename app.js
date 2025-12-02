@@ -1,7 +1,9 @@
-// ====== CLAVE DE LOCALSTORAGE ======
+// ====== CLAVES Y CONSTANTES ======
 const STORAGE_KEY = "tareasAgendaEliMarcelo";
+const DEVICE_OWNER_KEY = "agendaDeviceOwner";
+const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs";
 
-// ====== REFERENCIAS A LOS ELEMENTOS DEL HTML ======
+// ====== REFERENCIAS AL DOM ======
 const taskForm = document.getElementById("task-form");
 const titleInput = document.getElementById("task-title");
 const ownerSelect = document.getElementById("task-owner");
@@ -9,14 +11,47 @@ const dateInput = document.getElementById("task-date");
 const tasksList = document.getElementById("tasks-list");
 const emptyText = document.querySelector(".empty-text");
 const enableNotificationsBtn = document.getElementById("enable-notifications");
+const deviceOwnerSelect = document.getElementById("device-owner");
 
-// Arreglo en memoria con las tareas
+// Estado en memoria
 let tareas = [];
+let pushSubscription = null;
 
-// ====== CARGAR TAREAS AL INICIAR ======
-window.addEventListener("DOMContentLoaded", () => {
+// ====== UTILES ======
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+function getCurrentDeviceOwner() {
+  const stored = localStorage.getItem(DEVICE_OWNER_KEY);
+  if (stored === "Eli" || stored === "Marcelo") return stored;
+  return "Marcelo";
+}
+
+function saveCurrentDeviceOwner(owner) {
+  localStorage.setItem(DEVICE_OWNER_KEY, owner);
+}
+
+// ====== CARGA INICIAL ======
+window.addEventListener("DOMContentLoaded", async () => {
+  // Cargar dueño del dispositivo
+  const deviceOwner = getCurrentDeviceOwner();
+  if (deviceOwnerSelect) {
+    deviceOwnerSelect.value = deviceOwner;
+    deviceOwnerSelect.addEventListener("change", () => {
+      saveCurrentDeviceOwner(deviceOwnerSelect.value);
+    });
+  }
+
+  // Cargar tareas desde localStorage
   const guardadas = localStorage.getItem(STORAGE_KEY);
-
   if (guardadas) {
     try {
       tareas = JSON.parse(guardadas) || [];
@@ -26,7 +61,6 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Pintar las tareas guardadas
   tareas.forEach((tarea) => {
     const li = crearElementoTarea(tarea);
     tasksList.appendChild(li);
@@ -36,63 +70,58 @@ window.addEventListener("DOMContentLoaded", () => {
     emptyText.style.display = "none";
   }
 
-  // Si el navegador NO soporta notificaciones, ocultamos el botón
+  // Ocultar botón si no hay soporte de notificaciones
   if (!("Notification" in window) && enableNotificationsBtn) {
     enableNotificationsBtn.style.display = "none";
   }
 });
 
-// ====== GUARDAR EN LOCALSTORAGE ======
+// ====== GUARDAR TAREAS ======
 function guardarTareas() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tareas));
 }
 
-// ====== EVENTO: Enviar formulario ======
+// ====== FORM SUBMIT ======
 taskForm.addEventListener("submit", function (event) {
-  event.preventDefault(); // Evita que recargue la página
+  event.preventDefault();
 
   const title = titleInput.value.trim();
   const owner = ownerSelect.value;
   const date = dateInput.value;
 
-  // Si está vacío no hacemos nada
   if (!title) return;
 
-  // Crear objeto de tarea
   const nuevaTarea = {
-    id: Date.now().toString(), // id simple
-    title: title,
-    owner: owner,
-    date: date,
+    id: Date.now().toString(),
+    title,
+    owner,
+    date,
     done: false
   };
 
-  // Guardar en arreglo
   tareas.push(nuevaTarea);
   guardarTareas();
 
-  // Crear el elemento visual y añadirlo
   const li = crearElementoTarea(nuevaTarea);
   tasksList.appendChild(li);
 
-  // Ocultar mensaje vacío
   if (emptyText) emptyText.style.display = "none";
 
-  // Lanzar notificación local (en este dispositivo) si está permitido
-  mostrarNotificacionLocal(nuevaTarea);
+  // Enviar notificación PRO entre dispositivos
+  enviarNotificacionServidor(nuevaTarea).catch((e) =>
+    console.error("Error enviando notificación al servidor:", e)
+  );
 
-  // Limpiar formulario
   taskForm.reset();
   ownerSelect.value = "Ambos";
 });
 
-// ====== FUNCIÓN: Crear un <li> con toda la tarea completa ======
+// ====== CREAR ELEMENTO DE TAREA ======
 function crearElementoTarea(tarea) {
   const li = document.createElement("li");
   li.className = "task-item";
   li.dataset.id = tarea.id;
 
-  // ===== Checkbox =====
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.className = "task-checkbox";
@@ -108,7 +137,6 @@ function crearElementoTarea(tarea) {
     guardarTareas();
   });
 
-  // ===== Contenido =====
   const contentDiv = document.createElement("div");
   contentDiv.className = "task-content";
 
@@ -129,19 +157,15 @@ function crearElementoTarea(tarea) {
 
   metaDiv.appendChild(ownerSpan);
   metaDiv.appendChild(dateSpan);
-
   contentDiv.appendChild(titleDiv);
   contentDiv.appendChild(metaDiv);
 
-  // ===== Botón de borrar =====
   const deleteBtn = document.createElement("button");
   deleteBtn.className = "delete-btn";
   deleteBtn.textContent = "Borrar";
 
   deleteBtn.addEventListener("click", () => {
     li.remove();
-
-    // Eliminar del arreglo por id
     tareas = tareas.filter((t) => t.id !== tarea.id);
     guardarTareas();
 
@@ -150,7 +174,6 @@ function crearElementoTarea(tarea) {
     }
   });
 
-  // Armado final
   li.appendChild(checkbox);
   li.appendChild(contentDiv);
   li.appendChild(deleteBtn);
@@ -158,36 +181,82 @@ function crearElementoTarea(tarea) {
   return li;
 }
 
-// ====== NOTIFICACIONES LOCALES ======
-
+// ====== BOTÓN: ACTIVAR NOTIFICACIONES (SUSCRIPCIÓN PUSH) ======
 if (enableNotificationsBtn) {
   enableNotificationsBtn.addEventListener("click", async () => {
-    if (!("Notification" in window)) {
-      alert("Este navegador no soporta notificaciones");
-      return;
-    }
+    try {
+      if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+        alert("Este navegador no soporta notificaciones push.");
+        return;
+      }
 
-    const permiso = await Notification.requestPermission();
+      const permiso = await Notification.requestPermission();
+      if (permiso !== "granted") {
+        alert("Para recibir notificaciones, permite el acceso en Ajustes.");
+        return;
+      }
 
-    if (permiso === "granted") {
-      alert("Listo, este dispositivo ya puede recibir notificaciones de la agenda ✅");
-    } else if (permiso === "denied") {
-      alert("Bloqueaste las notificaciones. Para activarlas, cambia el permiso en Ajustes del navegador.");
+      const registration = await navigator.serviceWorker.ready;
+      const existingSub = await registration.pushManager.getSubscription();
+      if (existingSub) {
+        pushSubscription = existingSub;
+      } else {
+        pushSubscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+        });
+      }
+
+      const owner = getCurrentDeviceOwner();
+
+      await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          owner,
+          subscription: pushSubscription
+        })
+      });
+
+      alert("Notificaciones push activadas para este dispositivo ✅");
+    } catch (err) {
+      console.error("Error al activar notificaciones:", err);
+      alert("Hubo un error activando las notificaciones.");
     }
   });
 }
 
-function mostrarNotificacionLocal(tarea) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission !== "granted") return;
+// ====== ENVIAR NOTIFICACIÓN AL SERVIDOR (ENTRE DISPOSITIVOS) ======
+async function enviarNotificacionServidor(tarea) {
+  const fromOwner = getCurrentDeviceOwner();
 
-  const tituloNoti = `${tarea.owner} agregó un pendiente`;
-  const cuerpoNoti =
+  // ¿A quién hay que avisarle?
+  // Si el dispositivo es Marcelo y la tarea es de Eli → puede ser raro,
+  // así que la lógica simple será:
+  // - Si tarea.owner es "Marcelo" → avisar a "Eli"
+  // - Si tarea.owner es "Eli"     → avisar a "Marcelo"
+  // - Si tarea.owner es "Ambos"   → avisar a ambos
+  let targets = [];
+  if (tarea.owner === "Marcelo") {
+    targets = ["Eli"];
+  } else if (tarea.owner === "Eli") {
+    targets = ["Marcelo"];
+  } else {
+    targets = ["Marcelo", "Eli"];
+  }
+
+  const title = `${fromOwner} agregó un pendiente`;
+  const body =
     tarea.title + (tarea.date ? ` — vence: ${tarea.date}` : "");
 
-  new Notification(tituloNoti, {
-    body: cuerpoNoti,
-    icon: "icon-192.png"
+  await fetch("/api/send-notification", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title,
+      body,
+      targets
+    })
   });
 }
 
