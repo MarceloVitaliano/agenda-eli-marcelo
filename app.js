@@ -1,14 +1,11 @@
 // ====== CONFIGURACIÓN GENERAL ======
-const STORAGE_KEY = "tareasAgendaEliMarcelo";
 const DEVICE_OWNER_KEY = "agendaDeviceOwner";
 
-// 👉 1) Pega aquí la URL de tu backend en Render
-// EJEMPLO: const BACKEND_URL = "https://agenda-backend-q8ku.onrender.com";
+// URL de tu backend en Render
 const BACKEND_URL = "https://agenda-backend-q8ku.onrender.com";
 
-// 👉 2) Pega aquí TU VAPID PUBLIC KEY (la misma que pusiste en Render)
-// IMPORTANTE: solo la PÚBLICA, NO la privada.
-const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs";
+// Tu VAPID PUBLIC KEY (igual que en Render)
+const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs"; // <-- pon aquí tu clave
 
 // ====== REFERENCIAS AL DOM ======
 const taskForm = document.getElementById("task-form");
@@ -46,7 +43,7 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 // ====== CARGA INICIAL ======
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   // Dueño del dispositivo
   const deviceOwner = getCurrentDeviceOwner();
   if (deviceOwnerSelect) {
@@ -56,15 +53,14 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Tareas guardadas
-  const guardadas = localStorage.getItem(STORAGE_KEY);
-  if (guardadas) {
-    try {
-      tareas = JSON.parse(guardadas) || [];
-    } catch (e) {
-      console.error("Error al leer localStorage:", e);
-      tareas = [];
-    }
+  // Cargar tareas desde el backend
+  try {
+    const resp = await fetch(`${BACKEND_URL}/tasks`);
+    const data = await resp.json();
+    tareas = data.tasks || [];
+  } catch (err) {
+    console.error("Error cargando tareas del backend:", err);
+    tareas = [];
   }
 
   tareas.forEach((tarea) => {
@@ -82,13 +78,8 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-// ====== GUARDAR TAREAS ======
-function guardarTareas() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tareas));
-}
-
-// ====== FORM SUBMIT ======
-taskForm.addEventListener("submit", function (event) {
+// ====== FORM SUBMIT (NUEVA TAREA) ======
+taskForm.addEventListener("submit", async function (event) {
   event.preventDefault();
 
   const title = titleInput.value.trim();
@@ -97,26 +88,36 @@ taskForm.addEventListener("submit", function (event) {
 
   if (!title) return;
 
-  const nuevaTarea = {
-    id: Date.now().toString(),
+  const payload = {
     title,
     owner,
-    date,
-    done: false
+    date
   };
 
-  tareas.push(nuevaTarea);
-  guardarTareas();
+  try {
+    // Crear tarea en backend
+    const resp = await fetch(`${BACKEND_URL}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
 
-  const li = crearElementoTarea(nuevaTarea);
-  tasksList.appendChild(li);
+    const nuevaTarea = await resp.json();
 
-  if (emptyText) emptyText.style.display = "none";
+    // Guardar en arreglo local
+    tareas.push(nuevaTarea);
 
-  // Enviar notificación cruzada al backend
-  enviarNotificacionCruzada(nuevaTarea).catch((e) =>
-    console.error("Error enviando notificación:", e)
-  );
+    const li = crearElementoTarea(nuevaTarea);
+    tasksList.appendChild(li);
+
+    if (emptyText) emptyText.style.display = "none";
+
+    // Enviar notificación cruzada
+    await enviarNotificacionCruzada(nuevaTarea);
+  } catch (err) {
+    console.error("Error creando tarea:", err);
+    alert("No se pudo crear la tarea, intenta de nuevo.");
+  }
 
   taskForm.reset();
   ownerSelect.value = "Ambos";
@@ -137,10 +138,26 @@ function crearElementoTarea(tarea) {
     li.classList.add("task-done");
   }
 
-  checkbox.addEventListener("change", () => {
-    tarea.done = checkbox.checked;
-    li.classList.toggle("task-done", tarea.done);
-    guardarTareas();
+  checkbox.addEventListener("change", async () => {
+    const nuevoEstado = checkbox.checked;
+    li.classList.toggle("task-done", nuevoEstado);
+
+    // Actualizar en array local
+    const idx = tareas.findIndex((t) => t.id === tarea.id);
+    if (idx !== -1) {
+      tareas[idx].done = nuevoEstado;
+    }
+
+    // Actualizar en backend
+    try {
+      await fetch(`${BACKEND_URL}/tasks/${tarea.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ done: nuevoEstado })
+      });
+    } catch (err) {
+      console.error("Error actualizando tarea:", err);
+    }
   });
 
   const contentDiv = document.createElement("div");
@@ -170,13 +187,21 @@ function crearElementoTarea(tarea) {
   deleteBtn.className = "delete-btn";
   deleteBtn.textContent = "Borrar";
 
-  deleteBtn.addEventListener("click", () => {
+  deleteBtn.addEventListener("click", async () => {
     li.remove();
     tareas = tareas.filter((t) => t.id !== tarea.id);
-    guardarTareas();
 
     if (tasksList.children.length === 0 && emptyText) {
       emptyText.style.display = "block";
+    }
+
+    // Borrar en backend
+    try {
+      await fetch(`${BACKEND_URL}/tasks/${tarea.id}`, {
+        method: "DELETE"
+      });
+    } catch (err) {
+      console.error("Error borrando tarea:", err);
     }
   });
 
@@ -236,7 +261,6 @@ if (enableNotificationsBtn) {
 async function enviarNotificacionCruzada(tarea) {
   const fromOwner = getCurrentDeviceOwner();
 
-  // ¿A quién avisamos?
   let targets = [];
   if (tarea.owner === "Marcelo") {
     targets = ["Eli"];
