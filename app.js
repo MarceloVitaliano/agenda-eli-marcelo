@@ -1,6 +1,13 @@
-// ====== CLAVES Y CONSTANTES ======
+// ====== CONFIGURACIÓN GENERAL ======
 const STORAGE_KEY = "tareasAgendaEliMarcelo";
 const DEVICE_OWNER_KEY = "agendaDeviceOwner";
+
+// 👉 1) Pega aquí la URL de tu backend en Render
+// EJEMPLO: const BACKEND_URL = "https://agenda-backend-q8ku.onrender.com";
+const BACKEND_URL = "https://agenda-backend-q8ku.onrender.com";
+
+// 👉 2) Pega aquí TU VAPID PUBLIC KEY (la misma que pusiste en Render)
+// IMPORTANTE: solo la PÚBLICA, NO la privada.
 const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs";
 
 // ====== REFERENCIAS AL DOM ======
@@ -15,9 +22,18 @@ const deviceOwnerSelect = document.getElementById("device-owner");
 
 // Estado en memoria
 let tareas = [];
-let pushSubscription = null;
 
 // ====== UTILES ======
+function getCurrentDeviceOwner() {
+  const stored = localStorage.getItem(DEVICE_OWNER_KEY);
+  if (stored === "Eli" || stored === "Marcelo") return stored;
+  return "Marcelo";
+}
+
+function saveCurrentDeviceOwner(owner) {
+  localStorage.setItem(DEVICE_OWNER_KEY, owner);
+}
+
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -29,19 +45,9 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
-function getCurrentDeviceOwner() {
-  const stored = localStorage.getItem(DEVICE_OWNER_KEY);
-  if (stored === "Eli" || stored === "Marcelo") return stored;
-  return "Marcelo";
-}
-
-function saveCurrentDeviceOwner(owner) {
-  localStorage.setItem(DEVICE_OWNER_KEY, owner);
-}
-
 // ====== CARGA INICIAL ======
-window.addEventListener("DOMContentLoaded", async () => {
-  // Cargar dueño del dispositivo
+window.addEventListener("DOMContentLoaded", () => {
+  // Dueño del dispositivo
   const deviceOwner = getCurrentDeviceOwner();
   if (deviceOwnerSelect) {
     deviceOwnerSelect.value = deviceOwner;
@@ -50,7 +56,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // Cargar tareas desde localStorage
+  // Tareas guardadas
   const guardadas = localStorage.getItem(STORAGE_KEY);
   if (guardadas) {
     try {
@@ -70,7 +76,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     emptyText.style.display = "none";
   }
 
-  // Ocultar botón si no hay soporte de notificaciones
+  // Si no hay Notification, ocultamos botón
   if (!("Notification" in window) && enableNotificationsBtn) {
     enableNotificationsBtn.style.display = "none";
   }
@@ -107,9 +113,9 @@ taskForm.addEventListener("submit", function (event) {
 
   if (emptyText) emptyText.style.display = "none";
 
-  // Enviar notificación PRO entre dispositivos
-  enviarNotificacionServidor(nuevaTarea).catch((e) =>
-    console.error("Error enviando notificación al servidor:", e)
+  // Enviar notificación cruzada al backend
+  enviarNotificacionCruzada(nuevaTarea).catch((e) =>
+    console.error("Error enviando notificación:", e)
   );
 
   taskForm.reset();
@@ -181,7 +187,7 @@ function crearElementoTarea(tarea) {
   return li;
 }
 
-// ====== BOTÓN: ACTIVAR NOTIFICACIONES (SUSCRIPCIÓN PUSH) ======
+// ====== ACTIVAR NOTIFICACIONES (suscribe con backend) ======
 if (enableNotificationsBtn) {
   enableNotificationsBtn.addEventListener("click", async () => {
     try {
@@ -198,10 +204,10 @@ if (enableNotificationsBtn) {
 
       const registration = await navigator.serviceWorker.ready;
       const existingSub = await registration.pushManager.getSubscription();
-      if (existingSub) {
-        pushSubscription = existingSub;
-      } else {
-        pushSubscription = await registration.pushManager.subscribe({
+      let subscription = existingSub;
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
         });
@@ -209,12 +215,12 @@ if (enableNotificationsBtn) {
 
       const owner = getCurrentDeviceOwner();
 
-      await fetch("/api/subscribe", {
+      await fetch(`${BACKEND_URL}/subscribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           owner,
-          subscription: pushSubscription
+          subscription
         })
       });
 
@@ -226,16 +232,11 @@ if (enableNotificationsBtn) {
   });
 }
 
-// ====== ENVIAR NOTIFICACIÓN AL SERVIDOR (ENTRE DISPOSITIVOS) ======
-async function enviarNotificacionServidor(tarea) {
+// ====== ENVIAR NOTIFICACIÓN CRUZADA ======
+async function enviarNotificacionCruzada(tarea) {
   const fromOwner = getCurrentDeviceOwner();
 
-  // ¿A quién hay que avisarle?
-  // Si el dispositivo es Marcelo y la tarea es de Eli → puede ser raro,
-  // así que la lógica simple será:
-  // - Si tarea.owner es "Marcelo" → avisar a "Eli"
-  // - Si tarea.owner es "Eli"     → avisar a "Marcelo"
-  // - Si tarea.owner es "Ambos"   → avisar a ambos
+  // ¿A quién avisamos?
   let targets = [];
   if (tarea.owner === "Marcelo") {
     targets = ["Eli"];
@@ -249,7 +250,7 @@ async function enviarNotificacionServidor(tarea) {
   const body =
     tarea.title + (tarea.date ? ` — vence: ${tarea.date}` : "");
 
-  await fetch("/api/send-notification", {
+  await fetch(`${BACKEND_URL}/notify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -260,7 +261,7 @@ async function enviarNotificacionServidor(tarea) {
   });
 }
 
-// ====== REGISTRO DEL SERVICE WORKER (PWA) ======
+// ====== REGISTRO DEL SERVICE WORKER ======
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
