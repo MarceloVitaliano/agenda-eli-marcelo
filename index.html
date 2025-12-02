@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Agenda Eli & Marcelo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Color de la barra en móviles -->
+  <meta name="theme-color" content="#020617" />
+
+  <!-- Manifest PWA -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Conectar estilos -->
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Encabezado -->
+  <header class="app-header">
+    <h1>Agenda Eli & Marcelo</h1>
+    <p class="subtitle">Tus pendientes compartidos ✨</p>
+
+    <!-- Botón para activar notificaciones en este dispositivo -->
+    <button id="enable-notifications" class="btn-secondary">
+      Activar notificaciones en este dispositivo
+    </button>
+  </header>
+
+  <!-- Contenido principal -->
+  <main class="container">
+
+    <!-- FORMULARIO DE NUEVO PENDIENTE -->
+    <section class="card">
+      <h2>Nuevo pendiente</h2>
+
+      <form id="task-form">
+
+        <div class="form-group">
+          <label for="task-title">Descripción</label>
+          <input 
+            type="text" 
+            id="task-title" 
+            placeholder="Ej. Pagar luz, comprar croquetas, etc." 
+            required
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="task-owner">¿De quién es?</label>
+          <select id="task-owner">
+            <option value="Ambos">Ambos</option>
+            <option value="Marcelo">Marcelo</option>
+            <option value="Eli">Eli</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="task-date">Fecha límite</label>
+          <input type="date" id="task-date" required>
+        </div>
+
+        <button type="submit" class="btn-primary">Agregar pendiente</button>
+
+      </form>
+    </section>
+
+    <!-- SECCIÓN DE PENDIENTES -->
+    <section class="card">
+      <h2>Pendientes</h2>
+
+      <p class="empty-text">
+        Aquí se mostrarán tus pendientes cuando los agreguemos.
+      </p>
+
+      <!-- Lista donde aparecerán los pendientes -->
+      <ul id="tasks-list"></ul>
+    </section>
+
+  </main>
+
+  <!-- Conectar el JavaScript -->
+  <script src="app.js"></script>
+
+</body>
+</html>
+
+
