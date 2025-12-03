@@ -42,6 +42,30 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
+// ====== CARGAR TAREAS DESDE BACKEND Y RENDERIZAR ======
+async function loadTasksFromBackend() {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/tasks`);
+    const data = await resp.json();
+    tareas = data.tasks || [];
+  } catch (err) {
+    console.error("Error cargando tareas del backend:", err);
+    tareas = [];
+  }
+
+  // Limpiar lista en pantalla y volver a dibujar
+  tasksList.innerHTML = "";
+
+  tareas.forEach((tarea) => {
+    const li = crearElementoTarea(tarea);
+    tasksList.appendChild(li);
+  });
+
+  if (emptyText) {
+    emptyText.style.display = tareas.length > 0 ? "none" : "block";
+  }
+}
+
 // ====== CARGA INICIAL ======
 window.addEventListener("DOMContentLoaded", async () => {
   // Dueño del dispositivo
@@ -53,24 +77,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // Cargar tareas desde el backend
-  try {
-    const resp = await fetch(`${BACKEND_URL}/tasks`);
-    const data = await resp.json();
-    tareas = data.tasks || [];
-  } catch (err) {
-    console.error("Error cargando tareas del backend:", err);
-    tareas = [];
-  }
-
-  tareas.forEach((tarea) => {
-    const li = crearElementoTarea(tarea);
-    tasksList.appendChild(li);
-  });
-
-  if (tareas.length > 0 && emptyText) {
-    emptyText.style.display = "none";
-  }
+  // Cargar tareas compartidas desde el backend
+  await loadTasksFromBackend();
 
   // Si no hay Notification, ocultamos botón
   if (!("Notification" in window) && enableNotificationsBtn) {
@@ -104,7 +112,7 @@ taskForm.addEventListener("submit", async function (event) {
 
     const nuevaTarea = await resp.json();
 
-    // Guardar en arreglo local
+    // Actualizar arreglo local
     tareas.push(nuevaTarea);
 
     const li = crearElementoTarea(nuevaTarea);
@@ -261,10 +269,8 @@ if (enableNotificationsBtn) {
 async function enviarNotificacionCruzada(tarea) {
   const fromOwner = getCurrentDeviceOwner();
 
-  // Nueva lógica:
-  // - Si el dispositivo es de Marcelo → siempre se notifica a Eli
-  // - Si el dispositivo es de Eli     → siempre se notifica a Marcelo
-  // - Da igual si la tarea es de Marcelo, Eli o Ambos
+  // Lógica: si el dispositivo es de Marcelo → notifica a Eli
+  //         si el dispositivo es de Eli     → notifica a Marcelo
   let targets = [];
 
   if (fromOwner === "Marcelo") {
@@ -272,7 +278,6 @@ async function enviarNotificacionCruzada(tarea) {
   } else if (fromOwner === "Eli") {
     targets = ["Marcelo"];
   } else {
-    // Por si algún día hay más, mandamos a ambos
     targets = ["Marcelo", "Eli"];
   }
 
@@ -291,8 +296,9 @@ async function enviarNotificacionCruzada(tarea) {
   });
 }
 
-// ====== REGISTRO DEL SERVICE WORKER ======
+// ====== REGISTRO DEL SERVICE WORKER + ESCUCHA MENSAJES ======
 if ("serviceWorker" in navigator) {
+  // Registrar SW
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("service-worker.js")
@@ -302,5 +308,13 @@ if ("serviceWorker" in navigator) {
       .catch((err) => {
         console.error("Error al registrar Service Worker:", err);
       });
+  });
+
+  // Escuchar mensajes del Service Worker (para refrescar tareas)
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "refreshTasks") {
+      console.log("Mensaje de SW: refreshTasks → recargando tareas");
+      loadTasksFromBackend();
+    }
   });
 }
