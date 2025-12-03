@@ -4,7 +4,7 @@ const DEVICE_OWNER_KEY = "agendaDeviceOwner";
 // URL de tu backend en Render
 const BACKEND_URL = "https://agenda-backend-q8ku.onrender.com";
 
-// Tu VAPID PUBLIC KEY (igual que en Render)
+// Tu VAPID PUBLIC KEY (igual que en Render, SOLO la pública)
 const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs"; // <-- pon aquí tu clave
 
 // ====== REFERENCIAS AL DOM ======
@@ -261,12 +261,18 @@ if (enableNotificationsBtn) {
 async function enviarNotificacionCruzada(tarea) {
   const fromOwner = getCurrentDeviceOwner();
 
+  // Nueva lógica:
+  // - Si el dispositivo es de Marcelo → siempre se notifica a Eli
+  // - Si el dispositivo es de Eli     → siempre se notifica a Marcelo
+  // - Da igual si la tarea es de Marcelo, Eli o Ambos
   let targets = [];
-  if (tarea.owner === "Marcelo") {
+
+  if (fromOwner === "Marcelo") {
     targets = ["Eli"];
-  } else if (tarea.owner === "Eli") {
+  } else if (fromOwner === "Eli") {
     targets = ["Marcelo"];
   } else {
+    // Por si algún día hay más, mandamos a ambos
     targets = ["Marcelo", "Eli"];
   }
 
