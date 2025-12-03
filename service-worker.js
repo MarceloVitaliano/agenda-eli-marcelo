@@ -9,7 +9,7 @@ const ASSETS = [
   "/icon-512.png"
 ];
 
-// Cache básico para trabajar offline
+// Cache básico para offline
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
@@ -28,7 +28,7 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
-// Manejo de notificaciones push desde el servidor
+// Notificaciones push + refrescar tareas en los clientes
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
@@ -48,5 +48,20 @@ self.addEventListener("push", (event) => {
     badge: "icon-192.png"
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  const promiseChain = (async () => {
+    // Mostrar la notificación
+    await self.registration.showNotification(title, options);
+
+    // Avisar a las ventanas para que recarguen las tareas
+    const clientList = await self.clients.matchAll({
+      type: "window",
+      includeUncontrolled: true
+    });
+
+    for (const client of clientList) {
+      client.postMessage({ type: "refreshTasks" });
+    }
+  })();
+
+  event.waitUntil(promiseChain);
 });
