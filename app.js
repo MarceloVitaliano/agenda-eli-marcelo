@@ -5,7 +5,10 @@ const DEVICE_OWNER_KEY = "agendaDeviceOwner";
 const BACKEND_URL = "https://agenda-backend-q8ku.onrender.com";
 
 // Tu VAPID PUBLIC KEY (igual que en Render, SOLO la pública)
-const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs"; // <-- pon aquí tu clave
+const VAPID_PUBLIC_KEY = "BKAvhEy5n_cgZs2_8-jzvTuR_NT5Vm5BHdZOfqSJPkdjnuGPCNmptAmGoyRiWAj-t3TXpcf_RCW_hhLPfTUadSs";
+
+// Cada cuánto refrescar tareas (ms)
+const REFRESH_INTERVAL_MS = 5000;
 
 // ====== REFERENCIAS AL DOM ======
 const taskForm = document.getElementById("task-form");
@@ -19,6 +22,7 @@ const deviceOwnerSelect = document.getElementById("device-owner");
 
 // Estado en memoria
 let tareas = [];
+let refreshTimer = null;
 
 // ====== UTILES ======
 function getCurrentDeviceOwner() {
@@ -42,18 +46,8 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
-// ====== CARGAR TAREAS DESDE BACKEND Y RENDERIZAR ======
-async function loadTasksFromBackend() {
-  try {
-    const resp = await fetch(`${BACKEND_URL}/tasks`);
-    const data = await resp.json();
-    tareas = data.tasks || [];
-  } catch (err) {
-    console.error("Error cargando tareas del backend:", err);
-    tareas = [];
-  }
-
-  // Limpiar lista en pantalla y volver a dibujar
+// ====== RENDER ======
+function renderTasks() {
   tasksList.innerHTML = "";
 
   tareas.forEach((tarea) => {
@@ -66,19 +60,44 @@ async function loadTasksFromBackend() {
   }
 }
 
+// ====== CARGAR TAREAS DESDE BACKEND ======
+async function loadTasksFromBackend() {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/tasks`, { cache: "no-store" });
+    const data = await resp.json();
+    tareas = Array.isArray(data.tasks) ? data.tasks : [];
+  } catch (err) {
+    console.error("Error cargando tareas del backend:", err);
+    tareas = [];
+  }
+
+  renderTasks();
+}
+
+// ====== AUTO REFRESH ======
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(loadTasksFromBackend, REFRESH_INTERVAL_MS);
+}
+
 // ====== CARGA INICIAL ======
 window.addEventListener("DOMContentLoaded", async () => {
   // Dueño del dispositivo
   const deviceOwner = getCurrentDeviceOwner();
   if (deviceOwnerSelect) {
     deviceOwnerSelect.value = deviceOwner;
-    deviceOwnerSelect.addEventListener("change", () => {
+
+    deviceOwnerSelect.addEventListener("change", async () => {
       saveCurrentDeviceOwner(deviceOwnerSelect.value);
+      await loadTasksFromBackend(); // 🔥 recarga cuando cambias dueño
     });
   }
 
   // Cargar tareas compartidas desde el backend
   await loadTasksFromBackend();
+
+  // Iniciar refresco automático
+  startAutoRefresh();
 
   // Si no hay Notification, ocultamos botón
   if (!("Notification" in window) && enableNotificationsBtn) {
@@ -96,31 +115,26 @@ taskForm.addEventListener("submit", async function (event) {
 
   if (!title) return;
 
-  const payload = {
-    title,
-    owner,
-    date
-  };
+  const payload = { title, owner, date };
 
   try {
-    // Crear tarea en backend
     const resp = await fetch(`${BACKEND_URL}/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.error || "Error creando tarea");
+    }
+
     const nuevaTarea = await resp.json();
 
-    // Actualizar arreglo local
-    tareas.push(nuevaTarea);
+    // 🔥 En vez de push local (desincroniza), recargamos desde backend
+    await loadTasksFromBackend();
 
-    const li = crearElementoTarea(nuevaTarea);
-    tasksList.appendChild(li);
-
-    if (emptyText) emptyText.style.display = "none";
-
-    // Enviar notificación cruzada
+    // Notificación cruzada
     await enviarNotificacionCruzada(nuevaTarea);
   } catch (err) {
     console.error("Error creando tarea:", err);
@@ -140,7 +154,7 @@ function crearElementoTarea(tarea) {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.className = "task-checkbox";
-  checkbox.checked = tarea.done;
+  checkbox.checked = !!tarea.done;
 
   if (tarea.done) {
     li.classList.add("task-done");
@@ -150,21 +164,22 @@ function crearElementoTarea(tarea) {
     const nuevoEstado = checkbox.checked;
     li.classList.toggle("task-done", nuevoEstado);
 
-    // Actualizar en array local
-    const idx = tareas.findIndex((t) => t.id === tarea.id);
-    if (idx !== -1) {
-      tareas[idx].done = nuevoEstado;
-    }
-
     // Actualizar en backend
     try {
-      await fetch(`${BACKEND_URL}/tasks/${tarea.id}`, {
+      const resp = await fetch(`${BACKEND_URL}/tasks/${tarea.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ done: nuevoEstado })
       });
+
+      if (!resp.ok) throw new Error("No se pudo actualizar");
+
+      // 🔥 Recargar para mantener todo igual en ambos
+      await loadTasksFromBackend();
     } catch (err) {
       console.error("Error actualizando tarea:", err);
+      alert("No se pudo actualizar la tarea. Intenta de nuevo.");
+      await loadTasksFromBackend(); // volver al estado real
     }
   });
 
@@ -182,9 +197,7 @@ function crearElementoTarea(tarea) {
   ownerSpan.textContent = tarea.owner;
 
   const dateSpan = document.createElement("span");
-  dateSpan.textContent = tarea.date
-    ? `Fecha límite: ${tarea.date}`
-    : "";
+  dateSpan.textContent = tarea.date ? `Fecha límite: ${tarea.date}` : "";
 
   metaDiv.appendChild(ownerSpan);
   metaDiv.appendChild(dateSpan);
@@ -196,20 +209,19 @@ function crearElementoTarea(tarea) {
   deleteBtn.textContent = "Borrar";
 
   deleteBtn.addEventListener("click", async () => {
-    li.remove();
-    tareas = tareas.filter((t) => t.id !== tarea.id);
-
-    if (tasksList.children.length === 0 && emptyText) {
-      emptyText.style.display = "block";
-    }
-
-    // Borrar en backend
     try {
-      await fetch(`${BACKEND_URL}/tasks/${tarea.id}`, {
+      const resp = await fetch(`${BACKEND_URL}/tasks/${tarea.id}`, {
         method: "DELETE"
       });
+
+      if (!resp.ok && resp.status !== 204) throw new Error("No se pudo borrar");
+
+      // 🔥 Recargar para que ambos vean lo mismo
+      await loadTasksFromBackend();
     } catch (err) {
       console.error("Error borrando tarea:", err);
+      alert("No se pudo borrar la tarea. Intenta de nuevo.");
+      await loadTasksFromBackend();
     }
   });
 
@@ -248,14 +260,13 @@ if (enableNotificationsBtn) {
 
       const owner = getCurrentDeviceOwner();
 
-      await fetch(`${BACKEND_URL}/subscribe`, {
+      const resp = await fetch(`${BACKEND_URL}/subscribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          owner,
-          subscription
-        })
+        body: JSON.stringify({ owner, subscription })
       });
+
+      if (!resp.ok) throw new Error("No se pudo registrar suscripción");
 
       alert("Notificaciones push activadas para este dispositivo ✅");
     } catch (err) {
@@ -267,50 +278,36 @@ if (enableNotificationsBtn) {
 
 // ====== ENVIAR NOTIFICACIÓN CRUZADA ======
 async function enviarNotificacionCruzada(tarea) {
-  const fromOwner = getCurrentDeviceOwner();
+  try {
+    const fromOwner = getCurrentDeviceOwner();
 
-  // Lógica: si el dispositivo es de Marcelo → notifica a Eli
-  //         si el dispositivo es de Eli     → notifica a Marcelo
-  let targets = [];
+    let targets = [];
+    if (fromOwner === "Marcelo") targets = ["Eli"];
+    else if (fromOwner === "Eli") targets = ["Marcelo"];
+    else targets = ["Marcelo", "Eli"];
 
-  if (fromOwner === "Marcelo") {
-    targets = ["Eli"];
-  } else if (fromOwner === "Eli") {
-    targets = ["Marcelo"];
-  } else {
-    targets = ["Marcelo", "Eli"];
+    const title = `${fromOwner} agregó un pendiente`;
+    const body = tarea.title + (tarea.date ? ` — vence: ${tarea.date}` : "");
+
+    await fetch(`${BACKEND_URL}/notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, body, targets })
+    });
+  } catch (err) {
+    console.error("Error enviando notificación cruzada:", err);
   }
-
-  const title = `${fromOwner} agregó un pendiente`;
-  const body =
-    tarea.title + (tarea.date ? ` — vence: ${tarea.date}` : "");
-
-  await fetch(`${BACKEND_URL}/notify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title,
-      body,
-      targets
-    })
-  });
 }
 
 // ====== REGISTRO DEL SERVICE WORKER + ESCUCHA MENSAJES ======
 if ("serviceWorker" in navigator) {
-  // Registrar SW
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("service-worker.js")
-      .then(() => {
-        console.log("Service Worker registrado");
-      })
-      .catch((err) => {
-        console.error("Error al registrar Service Worker:", err);
-      });
+      .then(() => console.log("Service Worker registrado"))
+      .catch((err) => console.error("Error al registrar Service Worker:", err));
   });
 
-  // Escuchar mensajes del Service Worker (para refrescar tareas)
   navigator.serviceWorker.addEventListener("message", (event) => {
     if (event.data && event.data.type === "refreshTasks") {
       console.log("Mensaje de SW: refreshTasks → recargando tareas");
